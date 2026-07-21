@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Secrets and local environment settings
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Eve build and local workflow state
+.eve/
+.output/
+.workflow-data/
+
+# Vercel local metadata
+.vercel/
+
+# Logs and OS files
+*.log
+npm-debug.log*
+.DS_Store
