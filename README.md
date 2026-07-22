@@ -18,8 +18,8 @@ values ('Example Channel', 'https://youtube.com/@example', 'UCxxxxxxxx');
 
 ## Schedules and delivery
 
-- `agent/schedules/monitor.md` finds new uploads every 15 minutes.
-- `agent/schedules/retry_transcripts.md` retries unavailable captions every 10 minutes, up to 24 attempts.
+- `agent/schedules/monitor.md` finds new uploads daily at 08:30 IST (03:00 UTC).
+- `agent/schedules/retry_transcripts.md` retries unavailable captions daily at 08:35 IST (03:05 UTC), up to 24 attempts.
 - A video is marked processed only after its summary has been saved and Telegram delivery succeeds, so failed deliveries can be retried without losing work.
 
 Deploy as an Eve project with `vercel deploy` after configuring the same environment variables in Vercel.
