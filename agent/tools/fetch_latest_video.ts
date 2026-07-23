@@ -16,6 +16,10 @@ export default defineTool({
   outputSchema: z.object({ found: z.boolean(), video: z.object({ videoId: z.string(), title: z.string(), publishedAt: z.string(), url: z.string() }).nullable() }),
   async execute({ channelId }) {
     const response = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(channelId)}`);
+    if (response.status === 404) {
+      console.warn(`[fetch-latest-video] ${channelId} RSS returned 404. Check that this is the real YouTube channel ID.`);
+      return { found: false, video: null };
+    }
     if (!response.ok) throw new Error(`YouTube RSS request failed (${response.status})`);
     const entry = (await response.text()).match(/<entry>[\s\S]*?<\/entry>/)?.[0];
     if (!entry) return { found: false, video: null };
