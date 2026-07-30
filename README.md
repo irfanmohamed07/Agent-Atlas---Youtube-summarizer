@@ -6,7 +6,7 @@ An autonomous [Vercel Eve](https://eve.dev/) agent that watches YouTube RSS feed
 
 1. Create a Supabase project and run [supabase/schema.sql](/Users/irfanmd/Desktop/Youtube%20summarizer/supabase/schema.sql) in its SQL editor.
 2. Install server tools: `ffmpeg`, `yt-dlp`, and Python `faster-whisper`.
-3. Copy `.env.example` to `.env.local` and fill in the Supabase service-role key, your OpenAI API key for Eve, your DeepSeek API key for summaries, Telegram bot/chat details, and optional Apify API token. Keep `.env.local` private.
+3. Copy `.env.example` to `.env.local` and fill in the Supabase service-role key, your DeepSeek API key, Telegram bot/chat details, and optional Apify API token. Keep `.env.local` private.
 4. Install Node dependencies: `npm install`. The agent uses your own API keys directly, not AI Gateway.
 5. Run locally: `npm run dev`.
 
