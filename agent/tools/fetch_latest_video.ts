@@ -15,6 +15,7 @@ export default defineTool({
   inputSchema: z.object({ channelId: z.string().min(1) }),
   outputSchema: z.object({ found: z.boolean(), video: z.object({ videoId: z.string(), title: z.string(), publishedAt: z.string(), url: z.string() }).nullable() }),
   async execute({ channelId }) {
+    console.log(`[fetch-latest-video] ${channelId} checking RSS`);
     const response = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(channelId)}`);
     if (response.status === 404) {
       console.warn(`[fetch-latest-video] ${channelId} RSS returned 404. Check that this is the real YouTube channel ID.`);
@@ -22,12 +23,16 @@ export default defineTool({
     }
     if (!response.ok) throw new Error(`YouTube RSS request failed (${response.status})`);
     const entry = (await response.text()).match(/<entry>[\s\S]*?<\/entry>/)?.[0];
-    if (!entry) return { found: false, video: null };
+    if (!entry) {
+      console.log(`[fetch-latest-video] ${channelId} no videos found in RSS`);
+      return { found: false, video: null };
+    }
     const videoId = tag(entry, "yt:videoId");
     const title = tag(entry, "title");
     const publishedAt = tag(entry, "published");
     const url = entry.match(/<link[^>]+href=["']([^"']+)["']/)?.[1];
     if (!videoId || !title || !publishedAt || !url) throw new Error("YouTube RSS entry was missing required fields");
+    console.log(`[fetch-latest-video] ${channelId} latest videoId=${videoId} publishedAt=${publishedAt} title="${title}"`);
     return { found: true, video: { videoId, title, publishedAt, url } };
   },
 });

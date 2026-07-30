@@ -16,6 +16,7 @@ export default defineTool({
   async execute({ title, transcript }): Promise<VideoSummary> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY is required");
+    console.log(`[summarize-video] title="${title}" transcriptChars=${transcript.length} starting OpenAI summary`);
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -32,6 +33,8 @@ export default defineTool({
     const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const content = body.choices?.[0]?.message?.content;
     if (!content) throw new Error("OpenAI returned no summary content");
-    return summarySchema.parse(JSON.parse(content));
+    const summary = summarySchema.parse(JSON.parse(content));
+    console.log(`[summarize-video] title="${title}" storyChars=${summary.story.length} takeaways=${summary.keyTakeaways.length}`);
+    return summary;
   },
 });
