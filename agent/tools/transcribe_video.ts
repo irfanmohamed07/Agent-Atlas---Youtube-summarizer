@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
-import { mkdir, rm, stat } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
+import { supabase } from "../lib/supabase.js";
 
 const DEFAULT_WORK_DIR = "/tmp/youtube-summarizer-transcripts";
+const DEFAULT_AUDIO_DIR = "audio";
+const DEFAULT_RAPIDAPI_HOST = "youtube-mp36.p.rapidapi.com";
 const PYTHON_TRANSCRIBE_SCRIPT = `
 import json
 import sys
@@ -57,8 +60,73 @@ function runProcess(command: string, args: string[], logPrefix: string): Promise
   });
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractDownloadLink(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  for (const key of ["link", "url", "download_url", "downloadUrl", "audio", "audio_url", "audioUrl"]) {
+    const value = record[key];
+    if (typeof value === "string" && /^https?:\/\//i.test(value)) return value;
+  }
+  return null;
+}
+
+async function fetchRapidApiAudio(videoId: string, audioPath: string) {
+  const apiKey = process.env.RAPIDAPI_KEY;
+  if (!apiKey) throw new Error("RAPIDAPI_KEY is required for RapidAPI audio download");
+
+  const host = process.env.RAPIDAPI_HOST || DEFAULT_RAPIDAPI_HOST;
+  const maxPolls = Number.parseInt(process.env.RAPIDAPI_AUDIO_MAX_POLLS || "12", 10);
+  const pollDelayMs = Number.parseInt(process.env.RAPIDAPI_AUDIO_POLL_DELAY_MS || "5000", 10);
+  const endpoint = `https://${host}/dl?id=${encodeURIComponent(videoId)}`;
+
+  let downloadLink: string | null = null;
+  for (let attempt = 1; attempt <= maxPolls; attempt += 1) {
+    console.log(`[rapidapi-audio] ${videoId} requesting audio link attempt=${attempt}/${maxPolls} host=${host}`);
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "x-rapidapi-host": host,
+        "x-rapidapi-key": apiKey,
+      },
+    });
+
+    const text = await response.text();
+    if (!response.ok) throw new Error(`RapidAPI link request failed (${response.status}): ${text}`);
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error(`RapidAPI returned non-JSON response: ${text.slice(0, 300)}`);
+    }
+
+    downloadLink = extractDownloadLink(payload);
+    const status = typeof payload === "object" && payload ? String((payload as Record<string, unknown>).status ?? "unknown") : "unknown";
+    const progress = typeof payload === "object" && payload ? String((payload as Record<string, unknown>).progress ?? "unknown") : "unknown";
+    console.log(`[rapidapi-audio] ${videoId} response status=${status} progress=${progress} hasLink=${String(Boolean(downloadLink))}`);
+
+    if (downloadLink) break;
+    if (attempt < maxPolls) await sleep(pollDelayMs);
+  }
+
+  if (!downloadLink) throw new Error("RapidAPI did not return an audio download link");
+
+  console.log(`[rapidapi-audio] ${videoId} downloading mp3 from RapidAPI link`);
+  const audioResponse = await fetch(downloadLink);
+  if (!audioResponse.ok) throw new Error(`RapidAPI audio download failed (${audioResponse.status}): ${await audioResponse.text()}`);
+  const audioBytes = Buffer.from(await audioResponse.arrayBuffer());
+  if (audioBytes.length === 0) throw new Error("RapidAPI audio download returned an empty file");
+  await writeFile(audioPath, audioBytes);
+  console.log(`[rapidapi-audio] ${videoId} saved audio path=${audioPath} bytes=${audioBytes.length}`);
+}
+
 export default defineTool({
-  description: "Download YouTube audio with yt-dlp and transcribe it locally with faster-whisper. Use this as the main transcript path when YouTube captions are missing or unreliable.",
+  description: "Download YouTube audio with RapidAPI, save the MP3 path, and transcribe it locally with faster-whisper. Use this as the main transcript path when YouTube captions are missing or unreliable.",
   inputSchema: z.object({
     videoId: z.string().min(1),
     videoUrl: z.string().url(),
@@ -69,32 +137,36 @@ export default defineTool({
     language: z.string().nullable(),
     duration: z.number().nullable(),
     segmentCount: z.number().int(),
+    audioPath: z.string().nullable(),
   }),
   async execute({ videoId, videoUrl }) {
     const workDir = process.env.TRANSCRIPT_WORK_DIR || DEFAULT_WORK_DIR;
+    const audioDir = process.env.AUDIO_DIR || process.env.RAPIDAPI_AUDIO_DIR || DEFAULT_AUDIO_DIR;
     const modelSize = process.env.WHISPER_MODEL || "base";
     const device = process.env.WHISPER_DEVICE || "cpu";
     const computeType = process.env.WHISPER_COMPUTE_TYPE || "int8";
-    const outputTemplate = join(workDir, `${videoId}.%(ext)s`);
-    const audioPath = join(workDir, `${videoId}.mp3`);
+    const audioPath = join(audioDir, `${videoId}.mp3`);
 
     await mkdir(workDir, { recursive: true });
-    console.log(`[transcribe-video] ${videoId} downloading audio with yt-dlp`);
+    await mkdir(audioDir, { recursive: true });
+    console.log(`[transcribe-video] ${videoId} downloading audio with RapidAPI videoUrl=${videoUrl}`);
 
     try {
-      await runProcess("yt-dlp", [
-        "--no-playlist",
-        "--extract-audio",
-        "--audio-format",
-        "mp3",
-        "--audio-quality",
-        "5",
-        "-o",
-        outputTemplate,
-        videoUrl,
-      ], `[yt-dlp] ${videoId}`);
+      await fetchRapidApiAudio(videoId, audioPath);
       const audioStat = await stat(audioPath);
-      console.log(`[transcribe-video] ${videoId} audio downloaded path=${audioPath} bytes=${audioStat.size}`);
+      console.log(`[transcribe-video] ${videoId} audio ready path=${audioPath} bytes=${audioStat.size}`);
+
+      try {
+        await supabase(`videos?video_id=eq.${encodeURIComponent(videoId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+          body: JSON.stringify({ audio_path: audioPath }),
+        });
+        console.log(`[transcribe-video] ${videoId} saved audio_path to existing database row`);
+      } catch (dbError) {
+        const message = dbError instanceof Error ? dbError.message : String(dbError);
+        console.warn(`[transcribe-video] ${videoId} could not update audio_path yet: ${message}`);
+      }
 
       console.log(`[transcribe-video] ${videoId} transcribing with faster-whisper model=${modelSize} device=${device} compute=${computeType}`);
       const result = await runProcess("python3", ["-c", PYTHON_TRANSCRIBE_SCRIPT, audioPath, modelSize, device, computeType], `[faster-whisper] ${videoId}`);
@@ -110,14 +182,12 @@ export default defineTool({
         language: parsed.language ?? null,
         duration: typeof parsed.duration === "number" ? parsed.duration : null,
         segmentCount: segments.length,
+        audioPath,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[transcribe-video] ${videoId} failed: ${message}`);
-      return { transcriptReady: false, transcript: null, language: null, duration: null, segmentCount: 0 };
-    } finally {
-      await rm(audioPath, { force: true });
-      console.log(`[transcribe-video] ${videoId} cleaned audio path=${audioPath}`);
+      return { transcriptReady: false, transcript: null, language: null, duration: null, segmentCount: 0, audioPath: null };
     }
   },
 });

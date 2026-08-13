@@ -12,6 +12,9 @@ node_modules/
 .output/
 .workflow-data/
 
+# Downloaded YouTube audio files
+audio/
+
 # Vercel local metadata
 .vercel/
 

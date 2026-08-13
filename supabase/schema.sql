@@ -14,6 +14,7 @@ create table if not exists public.videos (
   channel_id bigint not null references public.channels(id) on delete cascade,
   title text not null,
   video_url text not null,
+  audio_path text,
   published_at timestamptz,
   transcript text,
   summary jsonb,
