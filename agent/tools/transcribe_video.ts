@@ -8,6 +8,10 @@ import { supabase } from "../lib/supabase.js";
 const DEFAULT_WORK_DIR = "/tmp/youtube-summarizer-transcripts";
 const DEFAULT_AUDIO_DIR = "audio";
 const DEFAULT_RAPIDAPI_HOST = "youtube-mp36.p.rapidapi.com";
+let whisperQueue: Promise<void> = Promise.resolve();
+let whisperQueueSize = 0;
+let rapidApiQueue: Promise<void> = Promise.resolve();
+let rapidApiQueueSize = 0;
 const PYTHON_TRANSCRIBE_SCRIPT = `
 import json
 import sys
@@ -74,6 +78,24 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function enqueueWhisper<T>(videoId: string, job: () => Promise<T>): Promise<T> {
+  whisperQueueSize += 1;
+  const position = whisperQueueSize;
+  console.log(`[whisper-queue] ${videoId} queued position=${position}`);
+
+  const run = whisperQueue.then(async () => {
+    whisperQueueSize -= 1;
+    console.log(`[whisper-queue] ${videoId} started remaining=${whisperQueueSize}`);
+    return job();
+  });
+
+  whisperQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 function extractDownloadLink(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null;
   const record = payload as Record<string, unknown>;
@@ -84,7 +106,7 @@ function extractDownloadLink(payload: unknown): string | null {
   return null;
 }
 
-async function fetchRapidApiAudio(videoId: string, audioPath: string) {
+async function fetchRapidApiAudioNow(videoId: string, audioPath: string) {
   const apiKey = process.env.RAPIDAPI_KEY;
   if (!apiKey) throw new Error("RAPIDAPI_KEY is required for RapidAPI audio download");
 
@@ -135,6 +157,24 @@ async function fetchRapidApiAudio(videoId: string, audioPath: string) {
   console.log(`[rapidapi-audio] ${videoId} saved audio path=${audioPath} bytes=${audioBytes.length}`);
 }
 
+function fetchRapidApiAudio(videoId: string, audioPath: string): Promise<void> {
+  rapidApiQueueSize += 1;
+  const position = rapidApiQueueSize;
+  console.log(`[rapidapi-queue] ${videoId} queued position=${position}`);
+
+  const run = rapidApiQueue.then(async () => {
+    rapidApiQueueSize -= 1;
+    console.log(`[rapidapi-queue] ${videoId} started remaining=${rapidApiQueueSize}`);
+    return fetchRapidApiAudioNow(videoId, audioPath);
+  });
+
+  rapidApiQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 export default defineTool({
   description: "Download YouTube audio with RapidAPI, save the MP3 path, and transcribe it locally with faster-whisper. Use this as the main transcript path when YouTube captions are missing or unreliable.",
   inputSchema: z.object({
@@ -183,13 +223,13 @@ export default defineTool({
 
       console.log(`[transcribe-video] ${videoId} transcribing with faster-whisper model=${modelSize} device=${device} compute=${computeType}`);
       await appendFile(whisperLogFile, `${new Date().toISOString()} [faster-whisper] ${videoId} started model=${modelSize} device=${device} compute=${computeType} python=${pythonBin}\n`);
-      const result = await runProcess(
-        pythonBin,
-        ["-c", PYTHON_TRANSCRIBE_SCRIPT, audioPath, modelSize, device, computeType],
-        `[faster-whisper] ${videoId}`,
-        whisperLogFile,
-        false,
-      );
+      const result = await enqueueWhisper(videoId, () => runProcess(
+          pythonBin,
+          ["-c", PYTHON_TRANSCRIBE_SCRIPT, audioPath, modelSize, device, computeType],
+          `[faster-whisper] ${videoId}`,
+          whisperLogFile,
+          false,
+        ));
       await appendFile(whisperLogFile, `${new Date().toISOString()} [faster-whisper] ${videoId} completed stdoutChars=${result.stdout.length} stderrChars=${result.stderr.length}\n`);
       console.log(`[transcribe-video] ${videoId} faster-whisper stdoutChars=${result.stdout.length} stderrChars=${result.stderr.length}`);
       const parsed = JSON.parse(result.stdout) as { language?: string; duration?: number; segments?: Array<{ text?: string }> };
