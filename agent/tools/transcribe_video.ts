@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
@@ -34,7 +34,13 @@ print(json.dumps({
 }, ensure_ascii=False))
 `;
 
-function runProcess(command: string, args: string[], logPrefix: string): Promise<{ stdout: string; stderr: string }> {
+function runProcess(
+  command: string,
+  args: string[],
+  logPrefix: string,
+  logFile?: string,
+  mirrorStderrToConsole = true,
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
@@ -44,7 +50,11 @@ function runProcess(command: string, args: string[], logPrefix: string): Promise
     child.stderr.on("data", (chunk: Buffer) => {
       stderr.push(chunk);
       const text = chunk.toString("utf8").trim();
-      if (text) console.log(`${logPrefix} ${text}`);
+      if (text) {
+        const line = `${new Date().toISOString()} ${logPrefix} ${text}\n`;
+        if (mirrorStderrToConsole) console.log(`${logPrefix} ${text}`);
+        if (logFile) void appendFile(logFile, line).catch(() => undefined);
+      }
     });
 
     child.on("error", reject);
@@ -145,10 +155,13 @@ export default defineTool({
     const modelSize = process.env.WHISPER_MODEL || "base";
     const device = process.env.WHISPER_DEVICE || "cpu";
     const computeType = process.env.WHISPER_COMPUTE_TYPE || "int8";
+    const pythonBin = process.env.PYTHON_BIN || "python3";
+    const whisperLogFile = process.env.WHISPER_LOG_FILE || join("logs", "whisper.log");
     const audioPath = join(audioDir, `${videoId}.mp3`);
 
     await mkdir(workDir, { recursive: true });
     await mkdir(audioDir, { recursive: true });
+    await mkdir(join(whisperLogFile, ".."), { recursive: true });
     console.log(`[transcribe-video] ${videoId} downloading audio with RapidAPI videoUrl=${videoUrl}`);
 
     try {
@@ -169,7 +182,15 @@ export default defineTool({
       }
 
       console.log(`[transcribe-video] ${videoId} transcribing with faster-whisper model=${modelSize} device=${device} compute=${computeType}`);
-      const result = await runProcess("python3", ["-c", PYTHON_TRANSCRIBE_SCRIPT, audioPath, modelSize, device, computeType], `[faster-whisper] ${videoId}`);
+      await appendFile(whisperLogFile, `${new Date().toISOString()} [faster-whisper] ${videoId} started model=${modelSize} device=${device} compute=${computeType} python=${pythonBin}\n`);
+      const result = await runProcess(
+        pythonBin,
+        ["-c", PYTHON_TRANSCRIBE_SCRIPT, audioPath, modelSize, device, computeType],
+        `[faster-whisper] ${videoId}`,
+        whisperLogFile,
+        false,
+      );
+      await appendFile(whisperLogFile, `${new Date().toISOString()} [faster-whisper] ${videoId} completed stdoutChars=${result.stdout.length} stderrChars=${result.stderr.length}\n`);
       console.log(`[transcribe-video] ${videoId} faster-whisper stdoutChars=${result.stdout.length} stderrChars=${result.stderr.length}`);
       const parsed = JSON.parse(result.stdout) as { language?: string; duration?: number; segments?: Array<{ text?: string }> };
       const segments = Array.isArray(parsed.segments) ? parsed.segments : [];
@@ -186,6 +207,7 @@ export default defineTool({
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      await appendFile(whisperLogFile, `${new Date().toISOString()} [faster-whisper] ${videoId} failed: ${message}\n`).catch(() => undefined);
       console.warn(`[transcribe-video] ${videoId} failed: ${message}`);
       return { transcriptReady: false, transcript: null, language: null, duration: null, segmentCount: 0, audioPath: null };
     }

@@ -31,6 +31,7 @@ RAPIDAPI_KEY=
 RAPIDAPI_HOST=youtube-mp36.p.rapidapi.com
 AUDIO_DIR=audio
 TRANSCRIPT_WORK_DIR=/tmp/youtube-summarizer-transcripts
+WHISPER_LOG_FILE=logs/whisper.log
 WHISPER_MODEL=base
 WHISPER_DEVICE=cpu
 WHISPER_COMPUTE_TYPE=int8
