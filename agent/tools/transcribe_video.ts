@@ -188,6 +188,7 @@ export default defineTool({
     duration: z.number().nullable(),
     segmentCount: z.number().int(),
     audioPath: z.string().nullable(),
+    errorReason: z.string().nullable(),
   }),
   async execute({ videoId, videoUrl }) {
     const workDir = process.env.TRANSCRIPT_WORK_DIR || DEFAULT_WORK_DIR;
@@ -244,12 +245,13 @@ export default defineTool({
         duration: typeof parsed.duration === "number" ? parsed.duration : null,
         segmentCount: segments.length,
         audioPath,
+        errorReason: null,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await appendFile(whisperLogFile, `${new Date().toISOString()} [faster-whisper] ${videoId} failed: ${message}\n`).catch(() => undefined);
       console.warn(`[transcribe-video] ${videoId} failed: ${message}`);
-      return { transcriptReady: false, transcript: null, language: null, duration: null, segmentCount: 0, audioPath: null };
+      return { transcriptReady: false, transcript: null, language: null, duration: null, segmentCount: 0, audioPath: null, errorReason: message };
     }
   },
 });

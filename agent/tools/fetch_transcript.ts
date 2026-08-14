@@ -102,7 +102,7 @@ async function fetchWithApify(videoId: string): Promise<string | null> {
 export default defineTool({
   description: "Download a video's YouTube transcript. Returns transcriptReady false when captions are not available yet; this is expected for recent uploads.",
   inputSchema: z.object({ videoId: z.string().min(1), useApify: z.boolean().optional().default(false) }),
-  outputSchema: z.object({ transcriptReady: z.boolean(), transcript: z.string().nullable() }),
+  outputSchema: z.object({ transcriptReady: z.boolean(), transcript: z.string().nullable(), errorReason: z.string().nullable() }),
   async execute({ videoId, useApify }) {
     const errors: string[] = [];
     logTranscript(videoId, `started useApify=${String(useApify)}`);
@@ -114,7 +114,7 @@ export default defineTool({
       logTranscript(videoId, `yt-caption-kit returned snippets=${transcript.snippets.length} chars=${fullText.length}`);
       if (fullText) {
         logTranscript(videoId, "success via yt-caption-kit");
-        return { transcriptReady: true, transcript: fullText };
+        return { transcriptReady: true, transcript: fullText, errorReason: null };
       }
       errors.push("yt-caption-kit: empty transcript");
     } catch (error) {
@@ -137,7 +137,7 @@ export default defineTool({
         logTranscript(videoId, `youtube-transcript ${attempt.label} returned lines=${lines.length} chars=${transcript.length}`);
         if (transcript) {
           logTranscript(videoId, `success via youtube-transcript ${attempt.label}`);
-          return { transcriptReady: true, transcript };
+          return { transcriptReady: true, transcript, errorReason: null };
         }
         errors.push(`youtube-transcript ${attempt.label}: empty transcript`);
       } catch (error) {
@@ -153,7 +153,7 @@ export default defineTool({
         const transcript = await fetchWithApify(videoId);
         if (transcript) {
           logTranscript(videoId, "success via apify");
-          return { transcriptReady: true, transcript };
+          return { transcriptReady: true, transcript, errorReason: null };
         }
         errors.push("apify: empty transcript");
       } catch (error) {
@@ -166,6 +166,6 @@ export default defineTool({
     }
 
     console.warn(`[fetch-transcript] ${videoId} not ready: ${errors.join(" | ")}`);
-    return { transcriptReady: false, transcript: null };
+    return { transcriptReady: false, transcript: null, errorReason: errors.join(" | ") || "Transcript unavailable" };
   },
 });
